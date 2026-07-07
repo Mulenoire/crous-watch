@@ -1,0 +1,46 @@
+name: Surveillance CROUS
+
+on:
+  schedule:
+    # Toutes les 2 minutes. Attention : GitHub Actions n'exécute pas les
+    # cron programmés plus fréquemment que ~5 minutes dans la pratique
+    # (les déclenchements trop rapprochés sont ignorés/retardés,
+    # surtout aux heures de forte affluence sur les serveurs GitHub).
+    - cron: "*/2 * * * *"
+  workflow_dispatch: {}
+    # Permet aussi de lancer le script manuellement depuis l'onglet "Actions"
+    # de GitHub, pratique pour tester.
+
+permissions:
+  contents: write
+  # Nécessaire pour que le workflow puisse enregistrer l'état
+  # (last_state.json) dans le dépôt entre deux exécutions.
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer les dépendances
+        run: pip install requests beautifulsoup4
+
+      - name: Lancer la vérification
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python crous_watch.py
+
+      - name: Sauvegarder l'état pour la prochaine vérification
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add last_state.json
+          git diff --staged --quiet || git commit -m "Mise à jour de l'état de surveillance [skip ci]"
+          git push
