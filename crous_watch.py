@@ -7,7 +7,7 @@ Ce script verifie regulierement une page de recherche de logement CROUS
 et envoie une notification Telegram des qu'un changement est detecte
 (typiquement : apparition d'un ou plusieurs logements).
 
-CONFIGURATION : le token et le chat_id sont lus depuis les variables
+CONFIGURATION : le token et le(s) chat_id sont lus depuis les variables
 d'environnement TELEGRAM_TOKEN et TELEGRAM_CHAT_ID (definies comme secrets
 GitHub Actions), pour ne jamais les ecrire en clair ici.
 """
@@ -25,7 +25,14 @@ from datetime import datetime
 # CONFIGURATION
 # ============================================================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+# Plusieurs destinataires possibles : liste de chat_id separes par des virgules
+# dans le secret TELEGRAM_CHAT_ID, par exemple "111111111,8884272660"
+TELEGRAM_CHAT_IDS = [
+    chat_id.strip()
+    for chat_id in os.environ.get("TELEGRAM_CHAT_ID", "").split(",")
+    if chat_id.strip()
+]
 
 SEARCH_URL = (
     "https://trouverunlogement.lescrous.fr/tools/47/search"
@@ -42,14 +49,15 @@ STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_stat
 # ============================================================
 
 def send_telegram_message(text: str) -> None:
-    """Envoie un message via le bot Telegram."""
+    """Envoie un message via le bot Telegram a tous les destinataires configures."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "disable_web_page_preview": False}
-    try:
-        r = requests.post(url, data=payload, timeout=15)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        print(f"[{datetime.now()}] Erreur lors de l'envoi Telegram : {e}", file=sys.stderr)
+    for chat_id in TELEGRAM_CHAT_IDS:
+        payload = {"chat_id": chat_id, "text": text, "disable_web_page_preview": False}
+        try:
+            r = requests.post(url, data=payload, timeout=15)
+            r.raise_for_status()
+        except requests.RequestException as e:
+            print(f"[{datetime.now()}] Erreur lors de l'envoi Telegram a {chat_id} : {e}", file=sys.stderr)
 
 
 def fetch_page(url: str) -> str:
@@ -75,17 +83,13 @@ def extract_relevant_content(html: str):
     """
     soup = BeautifulSoup(html, "html.parser")
 
-    # On cible la zone principale de contenu si elle existe, sinon tout le body
     main = soup.find("main") or soup.find("body") or soup
 
-    # On retire les scripts/styles qui ne sont pas pertinents
     for tag in main.find_all(["script", "style", "noscript"]):
         tag.decompose()
 
     text = main.get_text(separator=" | ", strip=True)
 
-    # Resume lisible : on cherche une phrase du type
-    # "Aucun logement trouve" ou "X logement(s) trouve(s)"
     match = re.search(r"(Aucun logement trouve|(\d+)\s+logements?\s+trouves?)", text, re.IGNORECASE)
     summary = match.group(0) if match else "Statut indisponible"
 
@@ -114,7 +118,7 @@ def save_current_hash(current_hash: str, summary: str) -> None:
 
 
 def main() -> None:
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_IDS:
         print(
             f"[{datetime.now()}] Erreur : TELEGRAM_TOKEN ou TELEGRAM_CHAT_ID "
             "non defini (variables d'environnement / secrets manquants).",
@@ -136,7 +140,6 @@ def main() -> None:
     previous_hash = load_previous_hash()
 
     if previous_hash is None:
-        # Premier lancement : on enregistre l'etat de reference, pas d'alerte
         save_current_hash(current_hash, summary)
         print(f"[{datetime.now()}] Premier lancement, etat de reference enregistre : {summary}")
         return
