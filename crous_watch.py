@@ -1,63 +1,50 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Surveillance de la plateforme CROUS (trouverunlogement.lescrous.fr)
---------------------------------------------------------------------
-Ce script verifie regulierement une page de recherche de logement CROUS
-et envoie une notification Telegram des qu'un changement est detecte
-(typiquement : apparition d'un ou plusieurs logements).
+name: Surveillance CROUS
 
-CONFIGURATION : le token et le chat_id sont lus depuis les variables
-d'environnement TELEGRAM_TOKEN et TELEGRAM_CHAT_ID (definies comme secrets
-GitHub Actions), pour ne jamais les ecrire en clair ici.
-"""
+on:
+  schedule:
+    # Toutes les 2 minutes. Attention : GitHub Actions n'execute pas les
+    # cron programmes plus frequemment que ~5 minutes dans la pratique
+    # (les declenchements trop rapproches sont ignores/retardes,
+    # surtout aux heures de forte affluence sur les serveurs GitHub).
+    - cron: "*/2 * * * *"
+  workflow_dispatch: {}
+    # Permet aussi de lancer le script manuellement depuis l'onglet "Actions"
+    # de GitHub, pratique pour tester.
 
-import requests
-from bs4 import BeautifulSoup
-import hashlib
-import json
-import os
-import re
-import sys
-from datetime import datetime
+permissions:
+  contents: write
+  # Necessaire pour que le workflow puisse enregistrer l'etat
+  # (last_state.json) dans le depot entre deux executions.
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
 
-SEARCH_URL = (
-    "https://trouverunlogement.lescrous.fr/tools/47/search"
-    "?occupationModes=alone"
-    "&bounds=5.2286902_43.3910329_5.5324758_43.1696205"
-    "&locationName=Marseille+%2813000%29"
-)
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-# Fichier ou le script garde en memoire le dernier etat vu
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_state.json")
+      - name: Installer les dependances
+        run: pip install requests beautifulsoup4
 
-# ============================================================
-# FONCTIONS
-# ============================================================
+      - name: Lancer la verification
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python crous_watch.py
 
-def send_telegram_message(text: str) -> None:
-    """Envoie un message via le bot Telegram."""
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "disable_web_page_preview": False}
-    try:
-        r = requests.post(url, data=payload, timeout=15)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        print(f"[{datetime.now()}] Erreur lors de l'envoi Telegram : {e}", file=sys.stderr)
-
-
-def fetch_page(url: str) -> str:
-    """Recupere le HTML de la page de recherche."""
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-        )
-    }
-    r = re
+      - name: Sauvegarder l'etat pour la prochaine verification
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -f last_state.json ]; then
+            git add last_state.json
+            git diff --staged --quiet || git commit -m "Mise a jour de l'etat de surveillance [skip ci]"
+            git push
+          else
+            echo "Aucun fichier last_state.json a enregistrer (le script n'a probablement pas pu recuperer la page cette fois-ci)."
+          fi
